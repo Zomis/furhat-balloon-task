@@ -1,5 +1,5 @@
 import { setup, createActor, fromPromise, assign } from "xstate";
-import { Message, DMContext, Timestamp } from "./types";
+import { Message, DMContext, Timestamp, Manipulation } from "./types";
 import { fakeFurhat, realFurhat, sanitizeUtterance } from "./furhat";
 import { fetchChatCompletion, fetchChatCompletionNoOllama } from "./ollama";
 import { waitForKeypress } from "./keypress";
@@ -7,16 +7,6 @@ import { allManipulationKeys, newManipulations, manipulations, interventionTypes
 
 const MOCK_FURHAT = false;
 const MOCK_LLM = false;
-
-function updateLastTimestamp(messages: Message[], timestamp: Timestamp) {
-  const head = messages.slice(0, messages.length - 1);
-  const tail = messages[messages.length - 1];
-  console.log("updateLastTimestamp", JSON.stringify(timestamp));
-  return [
-    ...head,
-    Object.assign(timestamp, tail)
-  ];
-}
 
 function timeString(timestamp: Timestamp, reference: Date): string {
   const zeroPad = (num: number, count: number) => String(num).padStart(count, '0');
@@ -80,8 +70,8 @@ const dmMachine = setup({
     fhSpeak: fromPromise(async ({ input }: { input: { text: string; isFirstMessage: boolean } }) => {
       return furhat.say(input.text, input.isFirstMessage);
     }),
-    fhSpeakAudio: fromPromise(async ({ input }: { input: { audioUrl: string; isFirstMessage: boolean } }) => {
-      return furhat.sayAudio(input.audioUrl, input.isFirstMessage);
+    fhSpeakManipulation: fromPromise(async ({ input }: { input: { manipulation: Manipulation; isFirstMessage: boolean } }) => {
+      return furhat.sayManipulation(input.manipulation, input.isFirstMessage);
     }),
     fhListen: fromPromise(async () => {
       return furhat.listen();
@@ -131,6 +121,7 @@ const dmMachine = setup({
   context: {
     userStartSpeakingTime: null,
     lastResult: "",
+    speakQueue: "Hello. We have a moral dilemma to talk about! Can you introduce yourself a bit? After that I am ready to assist you with the dilemma and your questions about each passenger.",
     isFirstMessage: true,
     interventions: [],
     pendingManipulation: null,
@@ -167,14 +158,6 @@ const dmMachine = setup({
         Audience: participants in a moral reasoning research study. Ethical Constraints: never simulate or encourage real-world violence. 
         Decline any non-hypothetical harmful requests. You may clarify that the discussion is fictional if needed.`
       },      
-      {
-        role: "assistant",
-        timestamp: {
-          start: new Date(),
-          end: new Date(),
-        },
-        content: "Hello. We have a moral dilemma to talk about! Can you introduce yourself a bit? After that I am ready to assist you with the dilemma and your questions about each passenger."
-      }
 
       /* 
       Hello! We have a moral dilemma to talk about! You need to sacrifice one person among four people! 
@@ -255,18 +238,20 @@ const dmMachine = setup({
       invoke: {
         src: "fhSpeak",
         input: ({ context }) => {
-          const lastMessage = context.messages[context.messages.length - 1];
           return { 
-            text: lastMessage.content,
+            text: context.speakQueue!!,
             isFirstMessage: context.isFirstMessage 
           };
         },
         onDone: {
           target: "ListeningOrWaitingForKey", // NEW: Go to the new state that does both
-          actions: [
-            () => console.log("Initial dilemma spoken, now listening for user or waiting for keypress"),
-            assign({ isFirstMessage: false })
-          ],
+          actions: assign(({ context, event }) => {
+            console.log("Initial dilemma spoken, now listening for user or waiting for keypress");
+            return {
+              isFirstMessage: false,
+              messages: [...context.messages, event.output],
+            }
+          }),
         },
         onError: {
           target: "ListeningOrWaitingForKey",
@@ -433,23 +418,9 @@ const dmMachine = setup({
         const manipulationIndex = parseInt(context.keyPressed || '', 10);
         const manipulation = isNaN(manipulationIndex) ? manipulations[context.keyPressed || ''] : context.interventions[manipulationIndex - 1];
         if (manipulation.audioUri) {
-          const textForHistory = manipulation.transcription || `[Audio manipulation: ${manipulation.audioUri}]`;
-          
           console.log(`Queuing audio: ${manipulation.audioUri}`);
-
           return {
-            messages: [
-              ...context.messages,
-              {
-                role: "assistant" as const,
-                content: textForHistory,
-                timestamp: {
-                  start: new Date(),
-                  end: new Date(),
-                }
-              }
-            ],
-            pendingManipulation: manipulation.audioUri,
+            pendingManipulation: manipulation,
           };
         } else {
           const phrase = manipulation.text;
@@ -459,29 +430,12 @@ const dmMachine = setup({
           console.log(`Adding manipulation phrase: ${phrase}`);
           // Add the manipulation phrase as an assistant message
           return {
-            messages: [
-              ...context.messages,
-              {
-                role: "assistant" as const,
-                timestamp: {
-                  start: new Date(),
-                  end: new Date(),
-                },
-                content: phrase
-              }
-            ],
-            pendingManipulation: phrase,
+            pendingManipulation: manipulation,
           };
         }
       }),
       always: [
         {
-          // If it's a hypothesis key, go to SpeakManipulationAudio state
-          guard: "isAudioKey",
-          target: "SpeakManipulationAudio",
-        },
-        {
-          // Otherwise, go to SpeakManipulation state
           target: "SpeakManipulation",
         }, 
       ], // After adding manipulation, go speak it
@@ -492,17 +446,21 @@ const dmMachine = setup({
     // Speak the manipulation phrase
     SpeakManipulation: {
       invoke: {
-        src: "fhSpeak",
+        src: "fhSpeakManipulation",
         input: ({ context }) => ({
-          text: context.pendingManipulation || "",
+          manipulation: context.pendingManipulation!!,
           isFirstMessage: false
         }),
         onDone: {
           target: "ListeningOrWaitingForKey", // After speaking manipulation, go back to listening/waiting
-          actions: [
-            () => console.log("Manipulation phrase spoken, now listening for user response or keypress"),
-            assign({ pendingManipulation: null, userStartSpeakingTime: null })
-          ],
+          actions: assign(({ context, event }) => {
+            console.log("Manipulation phrase spoken, now listening for user response or keypress");
+            return {
+              pendingManipulation: null,
+              userStartSpeakingTime: null,
+              messages: [...context.messages, event.output]
+            }
+          }),
         },
         onError: {
           target: "ListeningOrWaitingForKey",
@@ -510,31 +468,7 @@ const dmMachine = setup({
         },
       },
     },
-
-  
-
     
-    SpeakManipulationAudio:{
-      invoke: {
-        src: "fhSpeakAudio", // Changed from "fhSpeak" to "fhSpeakAudio"
-        input: ({ context }) => ({
-          audioUrl: context.pendingManipulation || "",
-          isFirstMessage: false
-        }),
-        onDone: {
-          target: "ListeningOrWaitingForKey",
-          actions: [
-            () => console.log("Manipulation audio played, now listening for user response"),
-            assign({ pendingManipulation: null, userStartSpeakingTime: null })
-          ],
-        },
-        onError: {
-          target: "ListeningOrWaitingForKey",
-          actions: ({ event }) => console.error("Furhat audio playback error:", event),
-        },
-      },
-    },
-
     // Send conversation history to LLM and get response
     ProcessingResponse: {
       entry: () => console.log("Getting LLM response..."),
@@ -548,28 +482,14 @@ const dmMachine = setup({
           actions: assign(({ context, event }) => {
             console.log(`LLM responded: ${event.output}`);
             return {
-              messages: [
-                ...context.messages,
-                {
-                  role: "assistant" as const,
-                  timestamp: { start: new Date(), end: new Date() },
-                  content: event.output,
-                }
-              ],
+              speakQueue: event.output,
             };
           }),
         },
         onError: {
           target: "Speaking",
           actions: assign(({ context }) => ({
-            messages: [
-              ...context.messages,
-              { 
-                role: "assistant" as const, 
-                timestamp: { start: new Date(), end: new Date() },
-                content: "I couldn't process that. Please say it again." 
-              }
-            ],
+            speakQueue: "I couldn't process that. Please say it again.",
           })),
         },
       },
@@ -580,9 +500,8 @@ const dmMachine = setup({
       invoke: {
         src: "fhSpeak",
         input: ({ context }) => {
-          const lastMessage = context.messages[context.messages.length - 1];
           return {
-            text: lastMessage.content,
+            text: context.speakQueue!!,
             isFirstMessage: false
           };
         },
@@ -591,7 +510,8 @@ const dmMachine = setup({
           actions: assign(({ context, event }) => {
             console.log("Finished speaking LLM response, now listening for user or keypress");
             return {
-              messages: updateLastTimestamp(context.messages, event.output),
+              messages: [...context.messages, event.output],
+              speakQueue: null,
             };
           }),
         },
@@ -612,16 +532,11 @@ const dmMachine = setup({
         }),
         onDone: {
           target: "LastQuestionWaitForYN",
-          actions: assign(({ context, event }) => ({
-            messages: [
-              ...context.messages,
-              {
-                role: "assistant" as const,
-                timestamp: { start: event.output.start, end: event.output.end },
-                content: "Thank you for your participation."
-              }
-            ],
-          })),
+          actions: assign(({ context, event }) => {
+            return {
+              messages: [...context.messages, event.output],
+            }
+          }),
         },
         onError: {
           target: "Done",
@@ -670,7 +585,7 @@ const dmMachine = setup({
         console.log("\n=== MESSAGE HISTORY ===");
         const startTime = context.messages[0].timestamp.start;
         context.messages.forEach((msg, i) => {
-          console.log(`${i + 1}. [${timeString(msg.timestamp, startTime)}] [${msg.role}]: ${msg.content}`);
+          console.log(`${i + 1}. ${timeString(msg.timestamp, startTime)} [${msg.role}]: ${msg.content}`);
         });
         console.log("======================\n");
       },

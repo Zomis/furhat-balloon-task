@@ -1,3 +1,5 @@
+import { Manipulation, Message } from "./types";
+
 const firstMessageWaitTimeMs = 0; // 0 second for the first message
 const FURHATURI = "192.168.1.11:54321";
 
@@ -8,8 +10,8 @@ export const realFurhat = {
   async say(text: string, isFirstMessage: boolean = false) {
     return await fhSay(text, isFirstMessage);
   },
-  async sayAudio(audioUrl: string, isFirstMessage: boolean = false) {
-    return await fhSayAudio(audioUrl, isFirstMessage);
+  async sayManipulation(manipulation: Manipulation, isFirstMessage: boolean = false) {
+    return await fhSayManipulation(manipulation, isFirstMessage);
   },
   async attendUser() {
     return await fhAttendUser();
@@ -21,13 +23,29 @@ export const realFurhat = {
 
 export const fakeFurhat = {
   async setVoice(name: string) {},
-  async say(text: string, isFirstMessage: boolean = false) {
+  async say(text: string, isFirstMessage: boolean = false): Promise<Message> {
     console.log("FURHAT SAYS: " + text);
-    return { start: new Date(), end: new Date() };
+    const start = new Date();
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    return {
+      role: "assistant",
+      content: text,
+      timestamp: {
+        start: start, end: new Date()
+      }
+    };
   },
-  async sayAudio(audioUrl: string, isFirstMessage: boolean = false) {
-    console.log("FURHAT SAYS AUDIO FILE: " + audioUrl);
-    return { start: new Date(), end: new Date() };
+  async sayManipulation(manipulation: Manipulation, isFirstMessage: boolean = false): Promise<Message> {
+    console.log("FURHAT SAYS AUDIO FILE: " + manipulation.audioUri);
+    const start = new Date();
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    return {
+      role: "assistant",
+      content: manipulation.transcription!!,
+      timestamp: {
+        start: start, end: new Date()
+      }
+    };
   },
   async attendUser() {},
   async listen(): Promise<string> {
@@ -47,7 +65,7 @@ export async function fhVoice(name: string) { // fh functions are fetched from F
   });
 }
 
-export async function fhSay(text: string, isFirstMessage: boolean = false) { 
+export async function fhSay(text: string, isFirstMessage: boolean = false): Promise<Message> {
   const myHeaders = new Headers();
   myHeaders.append("accept", "application/json");
   const encText = encodeURIComponent(text);
@@ -66,13 +84,22 @@ export async function fhSay(text: string, isFirstMessage: boolean = false) {
   // 6 second delay for first message (long introduction), 1 second for others
   const delay = isFirstMessage ? firstMessageWaitTimeMs : 200;
   await new Promise(resolve => setTimeout(resolve, delay));
-  return { start, end };
+  return {
+    role: "assistant",
+    content: text,
+    timestamp: {
+      start, end
+    }
+  };
 }
 
-export async function fhSayAudio(audioUrl: string, isFirstMessage: boolean = false) {
+export async function fhSayManipulation(manipulation: Manipulation, isFirstMessage: boolean = false): Promise<Message> {
+  if (manipulation.audioUri == null) {
+    return fhSay(manipulation.text!!, isFirstMessage);
+  }
   const myHeaders = new Headers();
   myHeaders.append("accept", "application/json");
-  const encUrl = encodeURIComponent(audioUrl);
+  const encUrl = encodeURIComponent(manipulation.audioUri!!);
   const start = new Date();
   // Remove the 'text=' and use 'url=' instead
   await fetch(`http://${FURHATURI}/furhat/say?url=${encUrl}&blocking=true&lipsync=true`, {
@@ -84,7 +111,13 @@ export async function fhSayAudio(audioUrl: string, isFirstMessage: boolean = fal
   
   const delay = isFirstMessage ? firstMessageWaitTimeMs : 200;
   await new Promise(resolve => setTimeout(resolve, delay));
-  return { start, end };
+  return {
+    role: "assistant",
+    content: manipulation.transcription ?? manipulation.text ?? "(Error: Unknown manipulation)",
+    timestamp: {
+      start, end
+    }
+  };
 }
 
 export async function fhAttendUser() { // This is about GAZE.
