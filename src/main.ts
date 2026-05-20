@@ -67,11 +67,11 @@ const dmMachine = setup({
     fhAttend: fromPromise(async () => {
       return furhat.attendUser();
     }),
-    fhSpeak: fromPromise(async ({ input }: { input: { text: string; isFirstMessage: boolean } }) => {
-      return furhat.say(input.text, input.isFirstMessage);
+    fhSpeak: fromPromise(async ({ input }: { input: { text: string } }) => {
+      return furhat.say(input.text);
     }),
-    fhSpeakManipulation: fromPromise(async ({ input }: { input: { manipulation: Manipulation; isFirstMessage: boolean } }) => {
-      return furhat.sayManipulation(input.manipulation, input.isFirstMessage);
+    fhSpeakManipulation: fromPromise(async ({ input }: { input: { manipulation: Manipulation } }) => {
+      return furhat.sayManipulation(input.manipulation);
     }),
     fhListen: fromPromise(async () => {
       return furhat.listen();
@@ -122,7 +122,6 @@ const dmMachine = setup({
     userStartSpeakingTime: null,
     lastResult: "",
     speakQueue: "Hello. We have a moral dilemma to talk about! Can you introduce yourself a bit? After that I am ready to assist you with the dilemma and your questions about each passenger.",
-    isFirstMessage: true,
     interventions: [],
     pendingManipulation: null,
     keyPressed: null,
@@ -240,7 +239,6 @@ const dmMachine = setup({
         input: ({ context }) => {
           return { 
             text: context.speakQueue!!,
-            isFirstMessage: context.isFirstMessage 
           };
         },
         onDone: {
@@ -248,7 +246,6 @@ const dmMachine = setup({
           actions: assign(({ context, event }) => {
             console.log("Initial dilemma spoken, now listening for user or waiting for keypress");
             return {
-              isFirstMessage: false,
               messages: [...context.messages, event.output],
             }
           }),
@@ -449,7 +446,6 @@ const dmMachine = setup({
         src: "fhSpeakManipulation",
         input: ({ context }) => ({
           manipulation: context.pendingManipulation!!,
-          isFirstMessage: false
         }),
         onDone: {
           target: "ListeningOrWaitingForKey", // After speaking manipulation, go back to listening/waiting
@@ -502,7 +498,6 @@ const dmMachine = setup({
         input: ({ context }) => {
           return {
             text: context.speakQueue!!,
-            isFirstMessage: false
           };
         },
         onDone: {
@@ -528,7 +523,6 @@ const dmMachine = setup({
         src: "fhSpeak",
         input: () => ({
           text: "Thank you for your participation.",
-          isFirstMessage: false
         }),
         onDone: {
           target: "LastQuestionWaitForYN",

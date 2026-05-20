@@ -16,7 +16,6 @@ export interface DMContext { // Our regular DMContext types.
   lastResult: string;
   messages: Message[];
   interventions: Manipulation[];
-  isFirstMessage: boolean; // If the message is the first message.
   pendingManipulation: Manipulation | null; // Stores the manipulation phrase to add to next assistant turn
   keyPressed: string | null; // Stores which key was pressed
   userSpeechBuffer: string[]; // NEW: Accumulates user utterances before processing
